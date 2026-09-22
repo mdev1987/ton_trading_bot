@@ -5,6 +5,7 @@ node_modules/
 *.log
 coverage/
 dist/
+data/
 .DS_Store
 deploy/
 .vscode/

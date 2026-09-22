@@ -93,6 +93,26 @@ export class PaperPortfolio {
     return this.cashBalance;
   }
 
+  /** Export all positions (open + closed) for persistence. */
+  public exportPositions(): Position[] {
+    return this.getPositions();
+  }
+
+  /** Restore cash and positions from persisted state (boot only). */
+  public restoreState(cashBalance: number, positions: Position[]): void {
+    if (!Number.isFinite(cashBalance) || cashBalance < 0) {
+      throw new Error("Invalid persisted cash balance.");
+    }
+    this.cashBalance = cashBalance;
+    this.positions.clear();
+    for (const position of positions) {
+      if (this.positions.has(position.id)) {
+        throw new Error(`Duplicate persisted position: ${position.id}`);
+      }
+      this.positions.set(position.id, position);
+    }
+  }
+
   /** Compute equity and performance metrics from current ledger state. */
   public getStats(): PortfolioStats {
     let marketValue = 0;

@@ -26,7 +26,11 @@ import {
 } from "./position.js";
 import { PaperPortfolio } from "./portfolio.js";
 import { config } from "./config.js";
-import { pollNewPools } from "./pool-scanner.js";
+import {
+  getSeenPoolCount,
+  pollNewPools,
+  type PoolSource,
+} from "./pool-scanner.js";
 import {
   positionClosedMarkdown,
   positionOpenedMarkdown,
@@ -34,10 +38,19 @@ import {
 } from "./reporter.js";
 import { TelegramReporter } from "./telegram.js";
 
+/** Pure predicate so the liquidity gate is unit-testable. */
+export function meetsMinLiquidity(
+  liquidityUsd: number | null | undefined,
+  minLiquidityUsd: number,
+): boolean {
+  return (liquidityUsd ?? 0) >= minLiquidityUsd;
+}
+
 /** Coordinates all paper trading actions. */
 export class PositionManager {
   private running = true;
   private idCounter = 0;
+  private scanCount = 0;
 
   public constructor(
     private readonly portfolio: PaperPortfolio,
@@ -46,6 +59,19 @@ export class PositionManager {
 
   public stop(): void {
     this.running = false;
+  }
+
+  /** Exposed for persistence across restarts. */
+  public getIdCounter(): number {
+    return this.idCounter;
+  }
+
+  /** Restore the counter from persistence (boot only). */
+  public setIdCounter(value: number): void {
+    if (!Number.isInteger(value) || value < 0) {
+      throw new Error("Invalid persisted id counter.");
+    }
+    this.idCounter = value;
   }
 
   /** Main concurrent loops: pool discovery and open-position monitoring. */
@@ -61,10 +87,27 @@ export class PositionManager {
     while (this.running) {
       try {
         const events = await pollNewPools();
+        this.scanCount += 1;
+        // Heartbeat every cycle: the oxmgr health check treats a log older
+        // than 6 minutes as a stuck loop, so a quiet market must still log.
+        console.log(
+          `🔄 scan #${this.scanCount} ${new Date().toISOString()} | ` +
+            `+${events.length} new | seen ${getSeenPoolCount()} pools | ` +
+            `${this.portfolio.getOpenPositions().length} open`,
+        );
 
         for (const event of events) {
           if (!this.running) break;
-          await this.handleNewPool(event.pool, event.isNewToken);
+          // One bad pool (bad metadata, no quote, RPC hiccup) must not
+          // abort the rest of the batch.
+          try {
+            await this.handleNewPool(event.pool, event.isNewToken, event.source);
+          } catch (error) {
+            this.logError(
+              `New pool ${event.pool.poolAddress} (${event.source})`,
+              error,
+            );
+          }
         }
       } catch (error) {
         this.logError("Pool discovery error", error);
@@ -94,10 +137,11 @@ export class PositionManager {
   private async handleNewPool(
     pool: NewTonPool,
     isNewToken: boolean,
+    source: PoolSource,
   ): Promise<void> {
     console.log("\n🆕 NEW POOL");
     console.log(
-      `${pool.createdAt} | ${pool.baseToken.symbol}/${pool.quoteToken.symbol} | ${pool.dexName}`,
+      `${pool.createdAt} | ${pool.baseToken.symbol}/${pool.quoteToken.symbol} | ${pool.dexName} | via ${source}`,
     );
     console.log(`Pool      : ${pool.poolAddress}`);
     console.log(`Token     : ${pool.baseToken.symbol}`);
@@ -120,6 +164,13 @@ export class PositionManager {
       !pool.dexName.toLowerCase().includes("dedust")
     ) {
       console.log("⏭️ Skip execution: current paper venue is DeDust Router");
+      return;
+    }
+
+    if (!meetsMinLiquidity(pool.liquidityUsd, config.minLiquidityUsd)) {
+      console.log(
+        `⏭️ Skip execution: liquidity $${pool.liquidityUsd ?? 0} below minimum $${config.minLiquidityUsd}`,
+      );
       return;
     }
 

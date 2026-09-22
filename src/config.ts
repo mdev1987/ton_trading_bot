@@ -106,6 +106,12 @@ export const config = {
     env("DEXSCREENER_URL") ?? "https://api.dexscreener.com",
   dexScreenerChainId: env("DEXSCREENER_CHAIN_ID") ?? "ton",
 
+  dexPaprikaUrl:
+    env("DEXPAPRIKA_URL") ?? "https://api.dexpaprika.com",
+  dexPaprikaApiKey: env("DEXPAPRIKA_API_KEY"),
+  dexPaprikaEnabled: booleanEnv("DEXPAPRIKA_ENABLED", true),
+  dexPaprikaLimit: integerEnv("DEXPAPRIKA_LIMIT", 50),
+
   dedustRouterUrl:
     env("DEDUST_ROUTER_URL") ??
     "https://api-mainnet.dedust.io/v1/router",
@@ -139,6 +145,14 @@ export const config = {
   paperAutoBuy: booleanEnv("PAPER_AUTO_BUY", true),
   onePositionPerToken:
     booleanEnv("ONE_POSITION_PER_TOKEN", true),
+  // Minimum CoinGecko-reported pool liquidity in USD for auto-buy.
+  // 0 disables the gate (previous behavior). Thin-LP micros slip hard,
+  // so a production paper value like 10000 is recommended.
+  minLiquidityUsd: numberEnv("MIN_LIQUIDITY_USD", 0),
+
+  // File-backed paper state (portfolio, seen pools, id counter).
+  stateFile: env("STATE_FILE") ?? "./data/paper-state.json",
+  stateSaveIntervalMs: integerEnv("STATE_SAVE_INTERVAL_MS", 15_000),
 
   poolScanIntervalMs: integerEnv("POOL_SCAN_INTERVAL_MS", 30_000),
   pricePollIntervalMs: integerEnv("PRICE_POLL_INTERVAL_MS", 1_500),
@@ -182,4 +196,16 @@ if (config.positionSize > config.paperInitialBalance) {
 
 if (config.maxOpenPositions < 1) {
   throw new Error("PAPER_MAX_OPEN_POSITIONS must be >= 1.");
+}
+
+if (config.minLiquidityUsd < 0) {
+  throw new Error("MIN_LIQUIDITY_USD must be >= 0.");
+}
+
+if (config.stateSaveIntervalMs < 1_000) {
+  throw new Error("STATE_SAVE_INTERVAL_MS must be >= 1000.");
+}
+
+if (config.dexPaprikaLimit < 1 || config.dexPaprikaLimit > 100) {
+  throw new Error("DEXPAPRIKA_LIMIT must be between 1 and 100.");
 }

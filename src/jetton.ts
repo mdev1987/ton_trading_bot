@@ -63,9 +63,20 @@ export async function getJettonMetadata(
 
   const name = data.metadata?.name ?? data.name;
   const symbol = data.metadata?.symbol ?? data.symbol;
-  const decimals = data.metadata?.decimals ?? data.decimals;
+  const decimalsRaw = data.metadata?.decimals ?? data.decimals;
+  // TONAPI sometimes returns decimals as a numeric string ("9").
+  // formatUnits requires a real integer, so coerce and validate here
+  // instead of throwing mid-quote deep in the execution path.
+  const decimals =
+    typeof decimalsRaw === "string" ? Number(decimalsRaw) : decimalsRaw;
 
-  if (!name || !symbol || decimals === undefined) {
+  if (
+    !name ||
+    !symbol ||
+    typeof decimals !== "number" ||
+    !Number.isInteger(decimals) ||
+    decimals < 0
+  ) {
     throw new Error(`Incomplete Jetton metadata: ${address}`);
   }
 
