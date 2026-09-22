@@ -19,7 +19,8 @@
     "@ton/core": "^0.63.1",
     "@ton/crypto": "^3.3.0",
     "@ton/ton": "^16.3.0",
-    "grammy": "^1.46.0"
+    "grammy": "^1.46.0",
+    "telegram-markdown-v2": "^0.0.5"
   },
   "devDependencies": {
     "@types/bun": "latest",
