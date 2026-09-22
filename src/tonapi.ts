@@ -13,13 +13,13 @@ export interface TonApiStatus {
   detail: string;
 }
 
-/** Check that TONAPI is reachable. */
+/** Check that TONAPI is reachable via the lightweight status endpoint. */
 export async function checkTonApi(): Promise<TonApiStatus> {
   const started = Date.now();
 
   try {
     const response = await fetch(
-      `${config.tonApiUrl}/v2/masterchainInfo`,
+      `${config.tonApiUrl}/v2/status`,
       {
         ...(config.tonApiKey
         ? { headers: { Authorization: `Bearer ${config.tonApiKey}` } }
@@ -28,12 +28,24 @@ export async function checkTonApi(): Promise<TonApiStatus> {
       },
     );
 
+    if (!response.ok) {
+      return {
+        ok: false,
+        latencyMs: Date.now() - started,
+        detail: `HTTP ${response.status}`,
+      };
+    }
+
+    const data = (await response.json()) as {
+      rest_online?: boolean;
+    };
+
+    const online = data.rest_online !== false;
+
     return {
-      ok: response.ok,
+      ok: online,
       latencyMs: Date.now() - started,
-      detail: response.ok
-        ? "masterchainInfo OK"
-        : `HTTP ${response.status}`,
+      detail: online ? "status OK (rest_online)" : "rest_online=false",
     };
   } catch (error) {
     return {

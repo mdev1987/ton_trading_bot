@@ -167,7 +167,7 @@ export class PositionManager {
     // binding is disabled, re-read DEX Screener for that actual pool so the
     // reference price and subsequent mark-to-market series stay aligned with
     // the execution venue rather than the discovery pool.
-    let referencePrice = discoveryReferencePrice;
+    let referencePrice: number = discoveryReferencePrice;
 
     if (buyQuote.poolAddress !== pool.poolAddress) {
       console.log(
@@ -185,14 +185,16 @@ export class PositionManager {
         return;
       }
 
-      referencePrice = getPairPrice(executionPair);
+      const executionPrice = getPairPrice(executionPair);
 
-      if (!referencePrice) {
+      if (!executionPrice) {
         console.log(
           "⏭️ Skip execution: invalid router-selected DEX Screener price",
         );
         return;
       }
+
+      referencePrice = executionPrice;
     }
 
     const beforeBalance = this.portfolio.getCashBalance();

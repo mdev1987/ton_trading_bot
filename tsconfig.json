@@ -11,6 +11,7 @@
     "exactOptionalPropertyTypes": true,
     "useUnknownInCatchVariables": true,
     "skipLibCheck": true,
+    "types": ["bun"],
     "lib": [
       "ES2022",
       "DOM"
