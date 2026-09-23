@@ -10,6 +10,7 @@ import { config } from "./config.js";
 import type { PaperPortfolio } from "./portfolio.js";
 import {
   positionsMarkdown,
+  statsMarkdown,
   statusMarkdown,
   toTelegramMarkdown,
 } from "./reporter.js";
@@ -29,7 +30,7 @@ export class TelegramReporter {
       await this.send(
         "### 🤖 TON PAPER TRADING BOT\n\n" +
           "Paper mode is active.\n\n" +
-          "Commands: `/status` · `/positions`",
+          "Commands: `/status` · `/positions` · `/stats`",
         ctx.chat.id.toString(),
       );
     });
@@ -44,6 +45,13 @@ export class TelegramReporter {
     this.bot.command("positions", async (ctx) => {
       await this.send(
         positionsMarkdown(this.portfolio.getPositions()),
+        ctx.chat.id.toString(),
+      );
+    });
+
+    this.bot.command("stats", async (ctx) => {
+      await this.send(
+        statsMarkdown(this.portfolio.getPositions()),
         ctx.chat.id.toString(),
       );
     });

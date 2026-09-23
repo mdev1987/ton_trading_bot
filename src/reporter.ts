@@ -87,6 +87,9 @@ export function positionOpenedMarkdown(
     `- **Entry:** ${position.executionEntryPrice.toFixed(12)} ${position.quoteSymbol}\n` +
     `- **Market Ref:** ${position.referenceEntryPrice.toFixed(12)} ${position.quoteSymbol}\n` +
     `- **Received:** ${quote.amountOut} ${position.baseSymbol}\n` +
+    `- **Entry Gap:** ${position.entryGapPct !== undefined ? `${position.entryGapPct >= 0 ? "+" : ""}${position.entryGapPct.toFixed(2)}%` : "—"}\n` +
+    `- **Source:** ${position.source ?? "—"}\n` +
+    `- **Entry LP:** ${position.entryLiquidityUsd !== null && position.entryLiquidityUsd !== undefined ? `$${position.entryLiquidityUsd.toFixed(0)}` : "—"}\n` +
     `- **Router:** ${quote.routerProtocol ?? "DeDust"}\n` +
     `- **Discovery Pool:** ${position.discoveryPoolAddress}\n` +
     `- **Execution Pool:** ${position.pairAddress}\n` +
@@ -191,4 +194,75 @@ export function positionsMarkdown(positions: Position[]): string {
   });
 
   return `### 📂 POSITIONS\n\n${lines.join("\n")}`;
+}
+
+/**
+ * Closed-trade statistics: overall outcome plus per-source and per-exit-reason
+ * breakdowns, so strategy tweaks are driven by data instead of gut feel.
+ */
+export function statsMarkdown(positions: Position[]): string {
+  const closed = positions.filter((position) => !position.isOpen);
+
+  if (closed.length === 0) {
+    return "### 📈 TRADE STATS\n\n_No closed trades yet._";
+  }
+
+  const eps = 1e-9;
+  let wins = 0;
+  let losses = 0;
+  let total = 0;
+  let best = -Infinity;
+  let worst = Infinity;
+  let holdMs = 0;
+  const bySource = new Map<string, { wins: number; losses: number; pnl: number }>();
+  const byReason = new Map<string, { count: number; pnl: number }>();
+
+  for (const position of closed) {
+    const pnl = position.totalPnl;
+    total += pnl;
+    if (pnl > eps) wins += 1;
+    else if (pnl < -eps) losses += 1;
+    best = Math.max(best, pnl);
+    worst = Math.min(worst, pnl);
+    if (position.closedAt !== null) {
+      holdMs += Math.max(0, position.closedAt - position.openedAt);
+    }
+
+    const source = position.source ?? "unknown";
+    const sourceStats = bySource.get(source) ?? { wins: 0, losses: 0, pnl: 0 };
+    if (pnl > eps) sourceStats.wins += 1;
+    else if (pnl < -eps) sourceStats.losses += 1;
+    sourceStats.pnl += pnl;
+    bySource.set(source, sourceStats);
+
+    const reason = position.exitReason ?? "unknown";
+    const reasonStats = byReason.get(reason) ?? { count: 0, pnl: 0 };
+    reasonStats.count += 1;
+    reasonStats.pnl += pnl;
+    byReason.set(reason, reasonStats);
+  }
+
+  const decisive = wins + losses;
+  const winrate = decisive > 0 ? (wins / decisive) * 100 : 0;
+  const avgHoldMin = holdMs / closed.length / 60_000;
+
+  const sourceLines = [...bySource.entries()].map(
+    ([source, stats]) =>
+      `- ${source}: ${stats.wins}W/${stats.losses}L · ${signed(stats.pnl)} GRAM`,
+  );
+  const reasonLines = [...byReason.entries()].map(
+    ([reason, stats]) =>
+      `- ${reason}: ${stats.count}× · ${signed(stats.pnl)} GRAM`,
+  );
+
+  return `### 📈 TRADE STATS\n\n` +
+    `- **Closed Trades:** ${closed.length}\n` +
+    `- **Wins / Losses:** ${wins} / ${losses}\n` +
+    `- **Winrate:** ${winrate.toFixed(2)}%\n` +
+    `- **Total PnL:** ${signed(total)} GRAM\n` +
+    `- **Avg / Trade:** ${signed(total / closed.length)} GRAM\n` +
+    `- **Best / Worst:** ${signed(best)} / ${signed(worst)} GRAM\n` +
+    `- **Avg Hold:** ${avgHoldMin.toFixed(1)} min\n\n` +
+    `🔎 **By Source**\n${sourceLines.join("\n")}\n\n` +
+    `🚪 **By Exit**\n${reasonLines.join("\n")}`;
 }

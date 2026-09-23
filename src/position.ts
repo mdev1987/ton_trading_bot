@@ -40,6 +40,13 @@ export interface Position {
   referenceEntryPrice: number;
   executionEntryPrice: number;
 
+  /** Discovery source that produced the pool ("coingecko" | "dexpaprika"). */
+  source: string | undefined;
+  /** Discovery-reported pool liquidity USD at entry. */
+  entryLiquidityUsd: number | null | undefined;
+  /** (exec - ref) / ref * 100 at entry; positive means paid up. */
+  entryGapPct: number | undefined;
+
   initialCost: number;
   entryNetworkFee: number;
   initialQuantity: number;
@@ -84,6 +91,10 @@ export interface CreatePositionParams {
 
   referenceEntryPrice: number;
   executionEntryPrice: number;
+
+  source?: string;
+  entryLiquidityUsd?: number | null;
+  entryGapPct?: number;
 
   quoteAmount: number;
   receivedQuantity: number;
@@ -143,6 +154,10 @@ export function createPosition(params: CreatePositionParams): Position {
 
     referenceEntryPrice: params.referenceEntryPrice,
     executionEntryPrice: effectiveExecutionPrice,
+
+    source: params.source,
+    entryLiquidityUsd: params.entryLiquidityUsd ?? null,
+    entryGapPct: params.entryGapPct,
 
     initialCost: params.quoteAmount,
     entryNetworkFee: params.entryNetworkFee ?? 0,
@@ -357,4 +372,41 @@ export function getDurationMs(position: Position, now = Date.now()): number {
     0,
     (position.closedAt ?? now) - position.openedAt,
   );
+}
+
+/**
+ * Entry gap in percent: how far the DeDust execution price landed above
+ * (positive) or below (negative) the discovery reference price.
+ */
+export function entryGapPercent(
+  executionPrice: number,
+  referencePrice: number,
+): number {
+  if (
+    !Number.isFinite(executionPrice) ||
+    !Number.isFinite(referencePrice) ||
+    referencePrice <= 0
+  ) {
+    throw new Error("Invalid prices for entry gap.");
+  }
+  return ((executionPrice - referencePrice) / referencePrice) * 100;
+}
+
+/** Realized PnL earned since the start of the current UTC day. */
+export function dayRealizedPnl(
+  realizedPnl: number,
+  dayStartRealized: number,
+): number {
+  return realizedPnl - dayStartRealized;
+}
+
+/**
+ * Daily loss kill-switch predicate. A non-positive limit disables the guard.
+ */
+export function lossGuardTripped(
+  dayPnl: number,
+  maxDailyLossGram: number,
+): boolean {
+  if (!(maxDailyLossGram > 0)) return false;
+  return dayPnl <= -maxDailyLossGram;
 }

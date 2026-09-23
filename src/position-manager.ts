@@ -14,16 +14,20 @@ import {
 import {
   applyVirtualSell,
   createPosition,
+  dayRealizedPnl,
+  entryGapPercent,
   getHardStopPrice,
   getTakeProfitQuantityRaw,
   getTriggeredTakeProfit,
   getTrailingActivationPrice,
   getTrailingStopPrice,
+  lossGuardTripped,
   markTakeProfitTriggered,
   updatePosition,
   type ExitReason,
   type Position,
 } from "./position.js";
+import { appendClosedTrade, utcDayString } from "./journal.js";
 import { PaperPortfolio } from "./portfolio.js";
 import { config } from "./config.js";
 import {
@@ -51,6 +55,11 @@ export class PositionManager {
   private running = true;
   private idCounter = 0;
   private scanCount = 0;
+  // Daily loss guard baseline: realized PnL at the start of the current UTC
+  // day. Persisted across restarts so a crash cannot reset the fuse.
+  private lossGuardDay = "";
+  private lossGuardDayStartRealized = 0;
+  private lossGuardAnnouncedDay = "";
 
   public constructor(
     private readonly portfolio: PaperPortfolio,
@@ -72,6 +81,26 @@ export class PositionManager {
       throw new Error("Invalid persisted id counter.");
     }
     this.idCounter = value;
+  }
+
+  /** Daily loss guard baseline, exposed for persistence across restarts. */
+  public getLossGuard(): { day: string; startRealized: number } {
+    return {
+      day: this.lossGuardDay,
+      startRealized: this.lossGuardDayStartRealized,
+    };
+  }
+
+  /** Restore the loss guard baseline from persistence (boot only). */
+  public setLossGuard(day: string, startRealized: number): void {
+    if (typeof day !== "string") {
+      throw new Error("Invalid persisted loss guard day.");
+    }
+    if (!Number.isFinite(startRealized)) {
+      throw new Error("Invalid persisted loss guard baseline.");
+    }
+    this.lossGuardDay = day;
+    this.lossGuardDayStartRealized = startRealized;
   }
 
   /** Main concurrent loops: pool discovery and open-position monitoring. */
@@ -151,6 +180,36 @@ export class PositionManager {
 
     if (!config.paperAutoBuy) {
       console.log("⏭️ Auto-buy disabled");
+      return;
+    }
+
+    // Daily loss kill-switch: halt NEW buys for the rest of the UTC day once
+    // realized day-PnL hits the limit. Open positions keep being managed.
+    const today = utcDayString();
+    const realizedPnl = this.portfolio.getStats().realizedPnl;
+    if (this.lossGuardDay !== today) {
+      this.lossGuardDay = today;
+      this.lossGuardDayStartRealized = realizedPnl;
+    }
+    const dayPnl = dayRealizedPnl(
+      realizedPnl,
+      this.lossGuardDayStartRealized,
+    );
+    if (lossGuardTripped(dayPnl, config.maxDailyLossGram)) {
+      console.log(
+        `⏭️ Skip execution: daily loss guard tripped ` +
+          `(day ${dayPnl.toFixed(4)} GRAM <= -${config.maxDailyLossGram} GRAM)`,
+      );
+      if (this.lossGuardAnnouncedDay !== today) {
+        this.lossGuardAnnouncedDay = today;
+        await this.reporter.report(
+          `### 🛑 DAILY LOSS GUARD\n\n` +
+            `New buys halted for the rest of ${today} UTC.\n` +
+            `- **Day PnL:** ${dayPnl.toFixed(4)} GRAM\n` +
+            `- **Limit:** -${config.maxDailyLossGram} GRAM\n` +
+            `- Open positions keep being managed.`,
+        );
+      }
       return;
     }
 
@@ -248,6 +307,21 @@ export class PositionManager {
       referencePrice = executionPrice;
     }
 
+    // Entry-slippage guard: skip when the DeDust fill lands too far above
+    // the discovery reference. Paying up +4% on a +30%-first-TP strategy
+    // burns a sixth of the first target before the trade starts.
+    const entryGapPct = entryGapPercent(
+      buyQuote.executionPrice,
+      referencePrice,
+    );
+    if (entryGapPct > config.maxEntrySlippagePct) {
+      console.log(
+        `⏭️ Skip execution: entry +${entryGapPct.toFixed(2)}% over reference ` +
+          `(limit +${config.maxEntrySlippagePct}%)`,
+      );
+      return;
+    }
+
     const beforeBalance = this.portfolio.getCashBalance();
     const entryFee = config.includeNetworkFees
       ? buyQuote.estimatedNetworkFee
@@ -266,6 +340,9 @@ export class PositionManager {
       quoteSymbol: config.nativeSymbol,
       referenceEntryPrice: referencePrice,
       executionEntryPrice: buyQuote.executionPrice,
+      source,
+      entryLiquidityUsd: pool.liquidityUsd ?? null,
+      entryGapPct,
       quoteAmount: config.positionSize,
       receivedQuantity: Number(buyQuote.amountOut),
       receivedQuantityRaw: buyQuote.amountOutRaw,
@@ -288,6 +365,7 @@ export class PositionManager {
     console.log(`Receive   : ${buyQuote.amountOut} ${buyQuote.tokenSymbol}`);
     console.log(`Exec price: ${buyQuote.executionPrice}`);
     console.log(`Reference : ${referencePrice}`);
+    console.log(`Entry gap : +${entryGapPct.toFixed(2)}% (limit +${config.maxEntrySlippagePct}%)`);
     console.log(`Balance   : ${beforeBalance.toFixed(4)} → ${afterBalance.toFixed(4)} GRAM`);
     console.log(`TP        : ${config.takeProfits.map((x) => `+${x.profitPercent}%/${x.sellPercent}%`).join(", ")}`);
     console.log(`Hard SL   : -${config.hardStopLossPercent}%`);
@@ -378,6 +456,7 @@ export class PositionManager {
         const tradePnl = position.realizedPnl - beforeRealized;
 
         if (!position.isOpen) {
+          this.journalClosed(position);
           const stats = this.portfolio.getStats();
           await this.reporter.report(
             positionClosedMarkdown({
@@ -497,6 +576,8 @@ export class PositionManager {
     const afterBalance = this.portfolio.getCashBalance();
     const stats = this.portfolio.getStats();
 
+    this.journalClosed(position);
+
     await this.reporter.report(
       positionClosedMarkdown({
         beforeBalance,
@@ -510,6 +591,16 @@ export class PositionManager {
     );
 
     return true;
+  }
+
+  /** Journal a freshly closed position. Never throws into the trading path. */
+  private journalClosed(position: Position): void {
+    const ok = appendClosedTrade(config.journalFile, position);
+    if (ok) {
+      console.log(
+        `📓 Journaled closed trade ${position.id} (${position.baseSymbol}, ${position.exitReason})`,
+      );
+    }
   }
 
   private nextPositionId(): string {

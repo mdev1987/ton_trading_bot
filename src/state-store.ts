@@ -33,7 +33,7 @@ export interface PersistedStateV1 {
   idCounter: number;
 }
 
-export interface PersistedState {
+export interface PersistedStateV2 {
   version: 2;
   cashBalance: number;
   positions: SerializedPosition[];
@@ -41,6 +41,19 @@ export interface PersistedState {
   seenTokens: string[];
   baselinedSources: ("coingecko" | "dexpaprika")[];
   idCounter: number;
+}
+
+export interface PersistedState {
+  version: 3;
+  cashBalance: number;
+  positions: SerializedPosition[];
+  seenPools: string[];
+  seenTokens: string[];
+  baselinedSources: ("coingecko" | "dexpaprika")[];
+  idCounter: number;
+  /** UTC day + realized-PnL baseline for the daily loss guard. */
+  lossGuardDay: string;
+  lossGuardStartRealized: number;
 }
 
 /** Convert a live position to its JSON-safe form. */
@@ -64,7 +77,7 @@ export function deserializePosition(raw: SerializedPosition): Position {
 /** Read persisted state. Returns null when missing or unreadable. */
 export function loadState(
   filePath: string,
-): PersistedState | PersistedStateV1 | null {
+): PersistedState | PersistedStateV2 | PersistedStateV1 | null {
   let text: string;
   try {
     text = readFileSync(filePath, "utf8");
@@ -73,9 +86,14 @@ export function loadState(
   }
 
   try {
-    const parsed = JSON.parse(text) as PersistedState | PersistedStateV1;
+    const parsed = JSON.parse(text) as
+      | PersistedState
+      | PersistedStateV2
+      | PersistedStateV1;
     if (
-      (parsed?.version !== 1 && parsed?.version !== 2) ||
+      (parsed?.version !== 1 &&
+        parsed?.version !== 2 &&
+        parsed?.version !== 3) ||
       !Array.isArray(parsed.positions)
     ) {
       console.warn(`⚠️ State file has unknown shape, ignoring: ${filePath}`);

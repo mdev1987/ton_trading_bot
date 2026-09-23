@@ -149,10 +149,19 @@ export const config = {
   // 0 disables the gate (previous behavior). Thin-LP micros slip hard,
   // so a production paper value like 10000 is recommended.
   minLiquidityUsd: numberEnv("MIN_LIQUIDITY_USD", 0),
+  // Max acceptable (exec - ref) / ref * 100 at entry. Skips fills that pay
+  // up more than this over the discovery reference (e.g. 3).
+  maxEntrySlippagePct: numberEnv("MAX_ENTRY_SLIPPAGE_PCT", 3),
+  // Daily loss kill-switch in GRAM of realized day-PnL. Halts NEW buys for
+  // the rest of the UTC day once hit; open positions keep being managed.
+  // 0 disables the guard.
+  maxDailyLossGram: numberEnv("PAPER_MAX_DAILY_LOSS_GRAM", 50),
 
   // File-backed paper state (portfolio, seen pools, id counter).
   stateFile: env("STATE_FILE") ?? "./data/paper-state.json",
   stateSaveIntervalMs: integerEnv("STATE_SAVE_INTERVAL_MS", 15_000),
+  // Closed-trade journal CSV (entry context + outcome per closed position).
+  journalFile: env("JOURNAL_FILE") ?? "./data/closed-trades.csv",
 
   poolScanIntervalMs: integerEnv("POOL_SCAN_INTERVAL_MS", 30_000),
   pricePollIntervalMs: integerEnv("PRICE_POLL_INTERVAL_MS", 1_500),
@@ -200,6 +209,14 @@ if (config.maxOpenPositions < 1) {
 
 if (config.minLiquidityUsd < 0) {
   throw new Error("MIN_LIQUIDITY_USD must be >= 0.");
+}
+
+if (config.maxEntrySlippagePct < 0) {
+  throw new Error("MAX_ENTRY_SLIPPAGE_PCT must be >= 0.");
+}
+
+if (config.maxDailyLossGram < 0) {
+  throw new Error("PAPER_MAX_DAILY_LOSS_GRAM must be >= 0.");
 }
 
 if (config.stateSaveIntervalMs < 1_000) {

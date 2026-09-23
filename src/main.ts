@@ -40,6 +40,8 @@ console.log(`Max Open        : ${config.maxOpenPositions}`);
 console.log(`TP              : ${config.takeProfits.map((x) => `${x.profitPercent}%/${x.sellPercent}%`).join(", ")}`);
 console.log(`Hard SL         : -${config.hardStopLossPercent}%`);
 console.log(`Trailing        : +${config.trailingActivationPercent}% / ${config.trailingDistancePercent}%`);
+console.log(`EntrySlip limit : +${config.maxEntrySlippagePct}%`);
+console.log(`DailyLoss guard : ${config.maxDailyLossGram > 0 ? `-${config.maxDailyLossGram} GRAM/day` : "OFF"}`);
 console.log(`Auto Buy        : ${config.paperAutoBuy ? "ON" : "OFF"}`);
 console.log(`Telegram        : ${config.telegramEnabled && config.telegramBotToken ? "ON" : "OFF"}`);
 console.log("================================");
@@ -53,14 +55,17 @@ const abortController = new AbortController();
 
 function snapshotState(): PersistedState {
   const scanner = getScannerState();
+  const guard = manager.getLossGuard();
   return {
-    version: 2,
+    version: 3,
     cashBalance: portfolio.getCashBalance(),
     positions: portfolio.exportPositions().map(serializePosition),
     seenPools: scanner.seenPools,
     seenTokens: scanner.seenTokens,
     baselinedSources: scanner.baselinedSources,
     idCounter: manager.getIdCounter(),
+    lossGuardDay: guard.day,
+    lossGuardStartRealized: guard.startRealized,
   };
 }
 
@@ -82,11 +87,17 @@ if (restored) {
     // DexPaprika source baselines silently on its first poll instead of
     // firing one event per pool in its lookback.
     const baselinedSources =
-      restored.version === 2
-        ? restored.baselinedSources
-        : restored.scannerInitialized
+      restored.version === 1
+        ? restored.scannerInitialized
           ? (["coingecko"] as const)
-          : [];
+          : []
+        : restored.baselinedSources;
+    // v1/v2 predate the loss guard: start today's baseline at the current
+    // realized PnL so history is never counted as today's loss.
+    const guardDay =
+      restored.version === 3 ? restored.lossGuardDay : "";
+    const guardStart =
+      restored.version === 3 ? restored.lossGuardStartRealized : 0;
     portfolio.restoreState(
       restored.cashBalance,
       restored.positions.map(deserializePosition),
@@ -97,6 +108,9 @@ if (restored) {
       baselinedSources: [...baselinedSources],
     });
     manager.setIdCounter(restored.idCounter);
+    if (guardDay) {
+      manager.setLossGuard(guardDay, guardStart);
+    }
     const openCount = portfolio.getOpenPositions().length;
     console.log(
       `💾 Restored paper state: ${restored.positions.length} positions (${openCount} open), ` +
